@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MarkText v1.2.1 test ONLY: suppress explicit crashReporter.start call.
+"""MarkText v1.2.2 test ONLY: suppress explicit crashReporter.start call.
 
 Run *after* the existing v1.1 portable-path patch. This is a controlled
 experiment, not a claim that Chromium/Electron cannot initialize Crashpad.
@@ -60,18 +60,24 @@ def transform(source: str) -> str:
             raise ValueError('Duplicate crash reporter option: ' + key)
         properties[key] = value.strip()
 
+    # The source in the failed build uses productName: 'MarkText', while
+    # another upstream revision used productName: 'marktext'. Both are the
+    # same known application name; neither changes the isolation experiment.
+    # Do not accept arbitrary new values or extra options.
     expected = {
         'companyName': "''",
-        'productName': "'marktext'",
         'uploadToServer': 'false',
         'compress': 'true',
     }
-    if properties != expected:
-        # This fails closed if upstream introduces any real behavior change.
-        # The actual parsed keys/values make a future build failure actionable.
+    allowed_product_names = {"'marktext'", "'MarkText'"}
+    actual_product_name = properties.pop('productName', None)
+    if properties != expected or actual_product_name not in allowed_product_names:
         raise ValueError(
             'Unexpected crash reporter options. '
-            + 'Expected ' + repr(expected) + '; found ' + repr(properties)
+            + 'Expected options ' + repr(expected)
+            + ' and productName in ' + repr(sorted(allowed_product_names))
+            + '; found options ' + repr(properties)
+            + ' and productName ' + repr(actual_product_name)
         )
     # Intentionally remove only the startup call. Keep MarkText's error logger.
     replacement = (
