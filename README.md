@@ -1,32 +1,48 @@
-# MarkText True-Portable Builder (Windows x64)
+# MarkText True-Portable GitHub Builder — Master v1.3
 
-This GitHub repository builds a private/unofficial Windows ZIP from your **clean `marktext` fork, `develop` branch**.
+This repo holds **two independent GitHub Actions workflows** for a Windows MarkText portable build, both using the same tested source-level portability changes.
 
-## Scope
+## Which workflow?
 
-Your user-confirmed residue is `%APPDATA%\marktext\Crashpad`. The patch in `packages/desktop/src/main/index.ts` runs **after** the upstream portable-path setup and **before** `crashReporter.start()`.
+| Workflow | Builds | How settings remain safe |
+|---|---|---|
+| `build-portable.yml` | Standalone Windows ZIP | MarkText data is stored in `marktext-user-data` **beside** `marktext.exe` |
+| `build-paf-portable.yml` | PAF-compatible app binary ZIP | The PortableApps launcher passes `--user-data-dir "%PAL:DataDir%\marktext-user-data"` to redirect settings to the **top-level Data folder** |
 
-When packaged MarkText runs on Windows, the patch redirects `crashDumps`, `sessionData` and `logs` to its already-selected `userData` directory. Make a `marktext-user-data` folder beside `marktext.exe` and those paths should stay under it.
+The GitHub builder repo contains **no executable and no user settings**. GitHub compiles a fresh EXE from the clean fork when you run a workflow.
 
-## Build
+## Changes applied during each GitHub build
 
-**Actions → Build MarkText True Portable → Run workflow**
+The following patch sequence is identical across both builds:
 
-- Leave source repository blank to use `<your-account>/marktext`.
-- Source ref should be `develop` (the upstream project's current development branch).
-- Download `MarkText-True-Portable-Windows-x64-<commit>` from Artifacts.
-- Extract the embedded `MarkText-True-Portable-Windows-x64-<commit>.zip`.
-- Keep `marktext-user-data` beside `marktext.exe`.
+1. `patch_marktext_portable.py` — v1.1 Electron `userData`, `sessionData`, logs and crash paths, plus `portable-paths.txt` diagnostics.
+2. `verify_marktext_source.py` — verifies v1.1 **while the upstream `crashReporter.start` call still exists**.
+3. `Disable-Crashpad-For-Test.py` — removes **both** upstream explicit `crashReporter.start()` calls, including the earlier one in `exceptionHandler.ts`.
+4. `Verify-Crashpad-Isolation-Source.py` — confirms that both reporter calls are disabled and JavaScript error logging remains.
+5. `Verify-MarkText-PAF-Source.py` — checks no reporter calls remain and portable paths/CLI support are present. Used for both build types.
 
-The build uses upstream `pnpm run build:win:x64`, then repackages only the upstream Windows ZIP. It does not upload the installer.
+**Historical script names are kept for compatibility with the successfully tested PAF workflow.** These are now the production patch steps, not separate experimental workflows.
 
-## Future failures
+## Build commands (no tools required on your laptop)
 
-The patch is deliberately fail-closed if its startup anchors change. Upload the GitHub Actions **job log archive** when troubleshooting.
+On GitHub: **Actions → Build MarkText True Portable → Run workflow** for the standalone ZIP, or **Actions → Build MarkText PAF-Compatible Windows x64 → Run workflow** for the PortableApps binary.
 
-## Caveats
+Leave the source repository field blank to use `YOUR-GITHUB-USERNAME/marktext`. Set source ref to `develop`, as previously tested. Source checkout must be the clean fork; never commit source patches into it.
 
-- No complete Windows build/runtime test has yet been performed by this package author.
-- This package targets the current source structure, which can change.
-- The change addresses the confirmed Crashpad escape; it is not a guarantee that Windows jump-list entries, file associations, credential stores, recent-file state, and system-managed traces are absent.
-- Do not modify your Universal Fork Sync until a real build has been tested.
+Both workflows use pnpm/Node on GitHub's Windows runner, run the upstream `pnpm run build:win:x64`, and upload the assembled ZIP through GitHub artifacts.
+
+## Installation
+
+**Standalone:** Download the `MarkText-True-Portable-Windows-x64-...` artifact, extract the embedded ZIP **completely**, and keep the adjacent `marktext-user-data` folder. Run `marktext.exe` or the packaged launcher. For testing, use `VERIFY-MARKTEXT-PORTABLE.cmd`.
+
+**PAF:** Download `MarkText-PAF-Binary-Windows-x64-...`. Copy the entire contents of `App-Binary` from the embedded ZIP to `MarkTextPortable/App/MarkText/` inside your **separate** MarkText PortableApps skeleton. Launch **only** through `MarkTextPortable.exe`, because that launcher must provide `--user-data-dir`. Keep `MarkTextPortable/Data/marktext-user-data` outside the replaceable `App` folder. Do not add the adjacent marker folder inside `App/MarkText`.
+
+## Important limitations
+
+* The tested Windows runtime showed no regenerated `%APPDATA%\marktext` directory after both reporter calls were disabled; future versions and other OS-managed traces are not guaranteed absent.
+* **Native Crashpad crash-report collection is disabled**, while MarkText's JavaScript error handlers remain.
+* This build does **not** install or update software automatically on your PC; it builds a downloadable artifact.
+* Future upstream source changes can cause the fail-closed patch checks to stop. Download the failed GitHub Actions job log and inspect the new upstream source before adapting anything.
+* Keep your personal MarkText profile and documents out of the GitHub builder repository.
+
+For one-time setup and rebuilding the repositories from scratch, read `START-HERE-BEGINNER-GUIDE.txt` from the outer ZIP.
