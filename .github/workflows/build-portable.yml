@@ -1,0 +1,122 @@
+name: Build MarkText True Portable
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: Optional MarkText fork (blank uses your-account/marktext)
+        required: false
+        default: ''
+        type: string
+      source_ref:
+        description: Source branch or commit
+        required: true
+        default: 'develop'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marktext-portable-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 110
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Resolve source
+        id: source
+        shell: pwsh
+        env:
+          REQUEST_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          $repo = $env:REQUEST_REPOSITORY.Trim()
+          if ([string]::IsNullOrWhiteSpace($repo)) {
+            $repo = '${{ github.repository_owner }}/marktext'
+          }
+          if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw "Invalid source repository: $repo"
+          }
+          "repository=$repo" >> $env:GITHUB_OUTPUT
+          "ref=$env:SOURCE_REF" >> $env:GITHUB_OUTPUT
+          Write-Host "Source: $repo @ $env:SOURCE_REF"
+
+      - name: Checkout clean MarkText fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ steps.source.outputs.ref }}
+          path: source
+          fetch-depth: 1
+
+      - name: Record revision
+        id: revision
+        shell: pwsh
+        run: |
+          $sha = (git -C source rev-parse HEAD).Trim()
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "MarkText source commit: $sha"
+
+      - name: Configure pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+          run_install: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+
+      - name: Apply Crashpad portability patch
+        shell: pwsh
+        run: |
+          python scripts/patch_marktext_portable.py --root source
+          python scripts/verify_marktext_source.py --root source --output build-report/source-verification.txt
+
+      - name: Install upstream dependencies
+        shell: pwsh
+        working-directory: source
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'pnpm install failed' }
+
+      - name: Build Windows x64 ZIP
+        shell: pwsh
+        working-directory: source
+        run: |
+          pnpm run build:win:x64
+          if ($LASTEXITCODE -ne 0) { throw 'MarkText build failed' }
+
+      - name: Assemble ready-to-use portable ZIP
+        shell: pwsh
+        run: |
+          & .\scripts\Assemble-MarkText-Portable.ps1 `
+            -SourceRoot "$PWD\source" `
+            -BuilderRoot "$PWD" `
+            -OutputRoot "$PWD\release"
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: MarkText-True-Portable-Windows-x64-${{ steps.revision.outputs.sha }}
+          path: release/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MarkText-Builder-Diagnostics-${{ github.run_id }}
+          path: build-report/**
+          if-no-files-found: warn
+          retention-days: 30
