@@ -18,7 +18,7 @@ def main():
     checks={
         'v1.1 portable-path patch still present': 'MARKTEXT_PORTABLE_CRASHPAD_V11' in text,
         'v1.2 isolation marker present once': text.count(MARKER)==1,
-        'explicit crash reporter call absent in entry point': re.search(r'crashReporter\s*\.\s*start\s*\(',text) is None,
+        'explicit crash reporter call absent in entry point': re.search(r'(?m)^[ \t]*crashReporter\s*\.\s*start\s*\(',text) is None,
         'crashReporter import removed': re.search(r'import\s*\{[^}]*\bcrashReporter\b[^}]*\}\s*from\s*[\'\"]electron',text) is None,
         'Electron path report still enabled': "'portable-paths.txt'" in text,
         'Electron crash directory override still enabled': "app.setPath('crashDumps', portableCrashpad)" in text,
@@ -34,7 +34,7 @@ def main():
             continue
         try: content=f.read_text(encoding='utf-8')
         except (OSError,UnicodeError): continue
-        if re.search(r'crashReporter\s*\.\s*start\s*\(',content):
+        if re.search(r'(?m)^[ \t]*crashReporter\s*\.\s*start\s*\(',content):
             other.append(str(f.relative_to(source)))
     checks['no other obvious explicit crash reporter start in main source']=not other
     lines=['MARKTEXT CRASHPAD ISOLATION v1.2 — SOURCE-ONLY CHECK','']

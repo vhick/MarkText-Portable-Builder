@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MarkText v1.2 test ONLY: suppress explicit crashReporter.start call.
+"""MarkText v1.2.1 test ONLY: suppress explicit crashReporter.start call.
 
 Run *after* the existing v1.1 portable-path patch. This is a controlled
 experiment, not a claim that Chromium/Electron cannot initialize Crashpad.
@@ -43,11 +43,36 @@ def transform(source: str) -> str:
     found = list(CALL.finditer(text))
     if len(found) != 1:
         raise ValueError(f'Expected one MarkText crashReporter.start block; found {len(found)}')
-    properties = [line.strip() for line in found[0].group('body').splitlines() if line.strip()]
-    if len(properties) != len(EXPECTED_OPTIONS) or any(
-        re.fullmatch(option, line) is None for option, line in zip(EXPECTED_OPTIONS, properties)
-    ):
-        raise ValueError('Crash reporter arguments changed upstream; refusing isolation patch')
+    # Normalize ordinary formatting before validating the four expected options.
+    # In v1.2, a line-by-line regex incorrectly rejected the valid upstream
+    # object despite the reporter call remaining unchanged.
+    properties = {}
+    for raw_line in found[0].group('body').splitlines():
+        # These options use simple scalar values; comments are not settings.
+        clean_line = raw_line.split('//', 1)[0].strip().rstrip(',').strip()
+        if not clean_line:
+            continue
+        prop = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)', clean_line)
+        if not prop:
+            raise ValueError('Unexpected crash reporter option syntax: ' + repr(clean_line))
+        key, value = prop.groups()
+        if key in properties:
+            raise ValueError('Duplicate crash reporter option: ' + key)
+        properties[key] = value.strip()
+
+    expected = {
+        'companyName': "''",
+        'productName': "'marktext'",
+        'uploadToServer': 'false',
+        'compress': 'true',
+    }
+    if properties != expected:
+        # This fails closed if upstream introduces any real behavior change.
+        # The actual parsed keys/values make a future build failure actionable.
+        raise ValueError(
+            'Unexpected crash reporter options. '
+            + 'Expected ' + repr(expected) + '; found ' + repr(properties)
+        )
     # Intentionally remove only the startup call. Keep MarkText's error logger.
     replacement = (
         '// ' + MARKER + '\n'
@@ -57,8 +82,10 @@ def transform(source: str) -> str:
     )
     text = CALL.sub(lambda _m: replacement, text, count=1)
     text = text.replace(IMPORT, NEW_IMPORT, 1)
-    if re.search(r'crashReporter\s*\.\s*start\s*\(', text):
-        raise ValueError('Another explicit crashReporter.start call is present in main/index.ts')
+    # Anchor at the beginning of a code line to ignore the v1.1 comment
+    # mentioning crashReporter.start() in its explanation.
+    if re.search(r'(?m)^[ \t]*crashReporter\s*\.\s*start\s*\(', text):
+        raise ValueError('Another real crashReporter.start call is present in main/index.ts')
     if text.count(MARKER) != 1:
         raise ValueError('Experimental test marker missing or duplicated')
     return text.replace('\n', newline)
