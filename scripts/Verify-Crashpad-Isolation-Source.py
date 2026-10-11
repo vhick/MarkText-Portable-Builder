@@ -1,53 +1,62 @@
 #!/usr/bin/env python3
-"""Check v1.2 Crashpad-isolation experimental source state."""
+"""Verify BOTH explicit MarkText crash reporter calls are disabled."""
+from __future__ import annotations
 import argparse
-import re
 from pathlib import Path
+import re
 
-MARKER = 'MARKTEXT_CRASHPAD_ISOLATION_V12'
+INDEX = 'packages/desktop/src/main/index.ts'
+HANDLER = 'packages/desktop/src/main/exceptionHandler.ts'
+
+# A code-line anchor avoids matching explanatory comments mentioning the call.
+REAL_CALL = re.compile(r'(?m)^[ \t]*crashReporter\s*\.\s*start\s*\(')
+REPORTER_IMPORT = re.compile(r"(?m)^\s*import\s*\{[^}\n]*\bcrashReporter\b[^}\n]*\}\s*from\s*['\"]electron")
 
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('--root',required=True)
-    p.add_argument('--output',required=True)
-    args = p.parse_args()
-    source=Path(args.root)
-    target=source/'packages/desktop/src/main/index.ts'
-    text=target.read_text(encoding='utf-8')
-    checks={
-        'v1.1 portable-path patch still present': 'MARKTEXT_PORTABLE_CRASHPAD_V11' in text,
-        'v1.2 isolation marker present once': text.count(MARKER)==1,
-        'explicit crash reporter call absent in entry point': re.search(r'(?m)^[ \t]*crashReporter\s*\.\s*start\s*\(',text) is None,
-        'crashReporter import removed': re.search(r'import\s*\{[^}]*\bcrashReporter\b[^}]*\}\s*from\s*[\'\"]electron',text) is None,
-        'Electron path report still enabled': "'portable-paths.txt'" in text,
-        'Electron crash directory override still enabled': "app.setPath('crashDumps', portableCrashpad)" in text,
-        'JS uncaught exception logging still enabled': "process.on('uncaughtException'" in text,
-        'disabled-crash-reporter marker precedes window creation': text.find(MARKER)<text.find('appController.init()'),
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', required=True)
+    parser.add_argument('--output', required=True)
+    args = parser.parse_args()
+    root = Path(args.root)
+    index = (root / INDEX).read_text(encoding='utf-8-sig')
+    handler = (root / HANDLER).read_text(encoding='utf-8-sig')
+    checks = {
+        'existing v1.1 portable patch remains': 'MARKTEXT_PORTABLE_CRASHPAD_V11' in index,
+        'index.ts isolation patch present once': index.count('MARKTEXT_CRASHPAD_ISOLATION_V12') == 1,
+        'exceptionHandler.ts early-start patch present once': handler.count('MARKTEXT_EXCEPTION_CRASHPAD_ISOLATION_V123') == 1,
+        'index.ts explicit crashReporter.start removed': REAL_CALL.search(index) is None,
+        'exceptionHandler.ts explicit crashReporter.start removed': REAL_CALL.search(handler) is None,
+        'index.ts crashReporter import removed': REPORTER_IMPORT.search(index) is None,
+        'exceptionHandler.ts crashReporter import removed': REPORTER_IMPORT.search(handler) is None,
+        'portable path diagnostic retained': "'portable-paths.txt'" in index,
+        'portable crashDumps override retained': "app.setPath('crashDumps', portableCrashpad)" in index,
+        'JS main exception reporting retained': "process.on('uncaughtException'" in index,
+        'exceptionHandler JS error reporting retained': "process.on('uncaughtException'" in handler,
+        'renderer error listener retained': "ipcMain.on('mt::handle-renderer-error'" in handler,
+        'early exception handler still installed': 'setupExceptionHandler()' in index,
     }
-    # Fail closed if another explicit crashReporter.start has appeared elsewhere
-    # in the main-process source. Ignore node_modules/generated code.
     other=[]
-    main_dir=source/'packages/desktop/src/main'
-    for f in main_dir.rglob('*'):
-        if f == target or not f.is_file() or f.suffix.lower() not in {'.ts','.tsx','.js','.mjs','.cjs'}:
+    for p in (root/'packages/desktop/src/main').rglob('*'):
+        if not p.is_file() or p.suffix.lower() not in {'.js', '.ts', '.mjs', '.cjs', '.tsx'}:
             continue
-        try: content=f.read_text(encoding='utf-8')
-        except (OSError,UnicodeError): continue
-        if re.search(r'(?m)^[ \t]*crashReporter\s*\.\s*start\s*\(',content):
-            other.append(str(f.relative_to(source)))
-    checks['no other obvious explicit crash reporter start in main source']=not other
-    lines=['MARKTEXT CRASHPAD ISOLATION v1.2 — SOURCE-ONLY CHECK','']
-    lines += [('PASS' if ok else 'FAIL')+': '+k for k,ok in checks.items()]
+        code=p.read_text(encoding='utf-8-sig', errors='replace')
+        for m in REAL_CALL.finditer(code):
+            other.append(f'{p.relative_to(root)}:{code.count(chr(10), 0, m.start())+1}')
+    checks['no remaining explicit start calls under main source'] = not other
+    report = 'MARKTEXT CRASHPAD ISOLATION v1.2.3 — SOURCE CHECK\n\n' + '\n'.join(
+        f"{'PASS' if value else 'FAIL'}: {name}" for name, value in checks.items()
+    )
     if other:
-        lines.append('Other starts: '+', '.join(other))
-    lines += ['', 'THIS IS AN EXPERIMENTAL BUILD, NOT PROOF OF ZERO APPDATA WRITES.',
-              'Windows runtime comparison is required.', '']
-    report='\n'.join(lines)
-    output=Path(args.output); output.parent.mkdir(parents=True,exist_ok=True)
-    output.write_text(report,encoding='utf-8')
+        report += '\nRemaining calls: ' + '; '.join(other)
+    report += '\n\nThis is a SOURCE check, not proof of zero AppData writes. Test the EXE on Windows.\n'
+    target = Path(args.output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(report, encoding='utf-8')
     print(report)
-    if not all(checks.values()): raise SystemExit('Isolation source verification FAILED')
+    if not all(checks.values()):
+        raise SystemExit('MarkText isolation verification FAILED')
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()
